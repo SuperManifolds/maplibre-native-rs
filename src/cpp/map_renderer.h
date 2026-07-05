@@ -46,8 +46,40 @@ enum uv_run_mode { UV_RUN_DEFAULT = 0, UV_RUN_ONCE, UV_RUN_NOWAIT };
 extern "C" int uv_run(uv_loop_t*, uv_run_mode);
 #endif
 
+#if defined(__APPLE__)
+// Stable libobjc ABI used by clang's @autoreleasepool codegen; the declarations
+// live in a private SDK header, so declare them directly.
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void*);
+#endif
+
 namespace mln {
 namespace bridge {
+
+// Drains Objective-C autoreleased objects created within the scope. MapLibre
+// Native's Metal backend autoreleases MTLCommandBuffer instances (e.g. an
+// upload pass acquires one per frame that is never committed); threads that
+// drive rendering without an autorelease pool never release them, and once 64
+// uncommitted buffers accumulate the command queue's semaphore blocks every
+// later render forever. Apple's run loops drain a pool per turn — do the same
+// around each run-loop turn and render submission here.
+class AutoreleasePoolScope {
+public:
+#if defined(__APPLE__)
+    AutoreleasePoolScope() : pool(objc_autoreleasePoolPush()) {}
+    ~AutoreleasePoolScope() { objc_autoreleasePoolPop(pool); }
+#else
+    AutoreleasePoolScope() = default;
+    ~AutoreleasePoolScope() = default;
+#endif
+    AutoreleasePoolScope(const AutoreleasePoolScope&) = delete;
+    AutoreleasePoolScope& operator=(const AutoreleasePoolScope&) = delete;
+
+private:
+#if defined(__APPLE__)
+    void* pool;
+#endif
+};
 
 struct Texture;
 struct TextureView;
@@ -77,6 +109,7 @@ inline void bindThreadRunLoop() {
 
 inline void currentThreadRunLoopTick() {
     // Tick can be driven through a Rust handle without constructing a renderer first.
+    AutoreleasePoolScope autoreleasePool;
     bindThreadRunLoop();
     threadRunLoop().runOnce();
 }
@@ -85,6 +118,7 @@ inline void currentThreadRunLoopTick() {
 // work (e.g. a render or style-load completion), without busy-polling. The exact
 // primitive differs by run-loop backend (see below).
 inline void currentThreadRunLoopWait() {
+    AutoreleasePoolScope autoreleasePool;
 #if defined(__APPLE__) && !defined(MLN_DARWIN_USE_LIBUV)
     // Darwin's RunLoop is CoreFoundation-based, not libuv-based: run until a
     // completion callback calls currentThreadRunLoopStop(). (May process more
@@ -240,6 +274,7 @@ public:
     }
 
     void render_once() {
+        AutoreleasePoolScope autoreleasePool;
         frontend->renderOnce(*map);
     }
 
@@ -369,6 +404,7 @@ private:
 };
 
 inline std::unique_ptr<RenderRequest> MapRenderer::submitRender() {
+    AutoreleasePoolScope autoreleasePool;
     auto request = std::make_unique<RenderRequest>();
     auto state = request->getState();
 
