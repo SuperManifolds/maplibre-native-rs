@@ -50,17 +50,14 @@ use crate::{
 pub struct Image(ImageBuffer<Rgba<u8>, Vec<u8>>);
 
 impl Image {
-    /// Create an Image from raw RGBA data
-    pub(crate) fn from_raw(bytes: &[u8]) -> Option<Self> {
-        // Parse dimensions from first 8 bytes
-        if bytes.len() < 8 {
-            return None;
-        }
-
-        let width = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let height = u32::from_ne_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        let data = bytes[8..].to_vec();
-        ImageBuffer::from_vec(width, height, data).map(Image)
+    /// Create an Image by copying the unpremultiplied RGBA pixels out of a
+    /// [`BridgeImage`], exactly once, into an owned buffer.
+    pub(crate) fn from_bridge(image: &BridgeImage) -> Option<Self> {
+        let size = image.size();
+        // SAFETY: `get()` returns a pointer to `bufferLength()` initialized bytes
+        // owned by the still-live `BridgeImage`.
+        let data = unsafe { std::slice::from_raw_parts(image.get(), image.bufferLength()) }.to_vec();
+        ImageBuffer::from_vec(size.width, size.height, data).map(Image)
     }
 
     /// Get access to the underlying image buffer.
@@ -68,6 +65,13 @@ impl Image {
     #[must_use]
     pub fn as_image(&self) -> &ImageBuffer<Rgba<u8>, Vec<u8>> {
         &self.0
+    }
+
+    /// Consume the image and take ownership of the underlying buffer, avoiding a
+    /// copy when the caller needs the [`ImageBuffer`] by value.
+    #[must_use]
+    pub fn into_inner(self) -> ImageBuffer<Rgba<u8>, Vec<u8>> {
+        self.0
     }
 }
 
@@ -134,9 +138,8 @@ impl<S> RenderRequest<'_, S> {
             return Err(RenderingError::Native(self.instance.errorMessage()));
         }
 
-        let data = self.instance.pin_mut().takeImage();
-        let bytes = data.as_bytes();
-        Image::from_raw(bytes).ok_or(RenderingError::InvalidImageData)
+        let image = self.instance.pin_mut().takeImage();
+        Image::from_bridge(&image).ok_or(RenderingError::InvalidImageData)
     }
 
     /// Blocks on the current thread until ready, then calls

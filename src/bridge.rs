@@ -1184,8 +1184,8 @@ pub mod ffi {
         fn hasError(self: &RenderRequest) -> bool;
         /// Returns the native error message for a failed render request.
         fn errorMessage(self: &RenderRequest) -> String;
-        /// Takes the rendered image bytes from a completed render request.
-        fn takeImage(self: Pin<&mut RenderRequest>) -> UniquePtr<CxxString>;
+        /// Takes the rendered image from a completed render request.
+        fn takeImage(self: Pin<&mut RenderRequest>) -> UniquePtr<BridgeImage>;
         /// Sets debug visualization flags.
         fn setDebugFlags(self: Pin<&mut MapRenderer>, flags: MapDebugOptions);
         /// Jumps to the requested camera options.

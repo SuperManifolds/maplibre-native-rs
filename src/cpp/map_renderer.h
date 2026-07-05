@@ -141,24 +141,6 @@ inline void currentThreadRunLoopStop() {
 #endif
 }
 
-inline std::unique_ptr<std::string> encodeImage(mbgl::PremultipliedImage image) {
-    auto unpremultipliedImage = mbgl::util::unpremultiply(std::move(image));
-
-    const size_t pixelCount = unpremultipliedImage.size.width * unpremultipliedImage.size.height;
-    std::string data;
-    data.reserve(2 * sizeof(uint32_t) + pixelCount * BYTES_PER_PIXEL);
-
-    uint32_t width = unpremultipliedImage.size.width;
-    uint32_t height = unpremultipliedImage.size.height;
-    data.append(reinterpret_cast<const char*>(&width), sizeof(uint32_t));
-    data.append(reinterpret_cast<const char*>(&height), sizeof(uint32_t));
-
-    const char* pixelData = reinterpret_cast<const char*>(unpremultipliedImage.data.get());
-    data.append(pixelData, pixelCount * BYTES_PER_PIXEL);
-
-    return std::make_unique<std::string>(std::move(data));
-}
-
 // TODO: Remove this mutex once the upstream fix is released and `MLN_COMMIT` is
 // bumped: https://github.com/maplibre/maplibre-native/pull/4332
 #if MLN_RENDER_BACKEND_OPENGL
@@ -191,9 +173,12 @@ public:
         mbgl::MapOptions mapOptions;
         mapOptions.withMapMode(mapMode).withSize(size).withPixelRatio(pixelRatio);
 
-        // Set up logging observer for Rust bridge
-        auto logObserver = std::make_unique<mln::bridge::RustLogObserver>();
-        mbgl::Log::setObserver(std::move(logObserver));
+        // The log observer is process-global; set the Rust bridge observer exactly
+        // once so later renderer constructions don't overwrite it.
+        static std::once_flag logObserverFlag;
+        std::call_once(logObserverFlag, [] {
+            mbgl::Log::setObserver(std::make_unique<mln::bridge::RustLogObserver>());
+        });
         map = std::make_unique<mbgl::Map>(*frontend, *mapObserverInstance, mapOptions, resourceOptions);
     }
     ~MapRenderer() {
@@ -295,10 +280,6 @@ public:
                                       double bearing,
                                       double pitch);
 
-    std::unique_ptr<std::string> readStillImageBytes() {
-        return encodeImage(frontend->readStillImage());
-    }
-
     void setSize(const mbgl::Size& size) {
         if (size.width == 0 || size.height == 0)
             return;
@@ -348,7 +329,7 @@ public:
     struct State {
         bool ready = false;
         std::exception_ptr error;
-        std::unique_ptr<std::string> image;
+        std::unique_ptr<BridgeImage> image;
     };
 
     RenderRequest()
@@ -389,7 +370,7 @@ public:
         }
     }
 
-    std::unique_ptr<std::string> takeImage() {
+    std::unique_ptr<BridgeImage> takeImage() {
         assert(state->ready);
         assert(!state->error);
         assert(state->image);
@@ -411,7 +392,7 @@ inline std::unique_ptr<RenderRequest> MapRenderer::submitRender() {
     map->renderStill([this, state](const std::exception_ptr& error) {
         state->error = error;
         if (!error) {
-            state->image = readStillImageBytes();
+            state->image = readStillImage();
         }
         state->ready = true;
 #if defined(__APPLE__) && !defined(MLN_DARWIN_USE_LIBUV)
