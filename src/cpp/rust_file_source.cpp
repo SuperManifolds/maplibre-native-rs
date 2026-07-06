@@ -32,12 +32,14 @@ mbgl::Response buildResponse(const RawResponse& r) {
             r.error_reason, std::string(r.error_message));
     }
     response.noContent = r.no_content;
+    response.notModified = r.not_modified;
+    response.mustRevalidate = r.must_revalidate;
     if (r.has_data) {
         response.data = std::make_shared<std::string>(
             reinterpret_cast<const char*>(r.data.data()), r.data.size());
     }
-    if (r.has_expires) {
-        response.expires = mbgl::Timestamp(mbgl::Seconds(r.modified_epoch_s));
+    if (r.has_modified) {
+        response.modified = mbgl::Timestamp(mbgl::Seconds(r.modified_epoch_s));
     }
     if (r.has_expires) {
         response.expires = mbgl::Timestamp(mbgl::Seconds(r.expires_epoch_s));
