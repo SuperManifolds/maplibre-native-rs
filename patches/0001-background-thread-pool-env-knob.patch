@@ -1,0 +1,34 @@
+diff --git i/src/mbgl/util/thread_pool.hpp w/src/mbgl/util/thread_pool.hpp
+index f4898b6..0dea96e 100644
+--- i/src/mbgl/util/thread_pool.hpp
++++ w/src/mbgl/util/thread_pool.hpp
+@@ -8,6 +8,7 @@
+ #include <mbgl/util/instrumentation.hpp>
+ 
+ #include <condition_variable>
++#include <cstdlib>
+ #include <mutex>
+ #include <queue>
+ #include <thread>
+@@ -179,8 +180,20 @@ public:
+ class ThreadPool final : public ParallelScheduler {
+ public:
+     ThreadPool()
+-        : ParallelScheduler(3) {}
++        : ParallelScheduler(backgroundThreadCount() - 1) {}
+     ~ThreadPool() override { invalidateWeakPtrsEarly(); }
++
++    // Total thread count for the shared background pool. Defaults to the
++    // historical 4; MLN_BACKGROUND_THREADS overrides (clamped to [1, 32]).
++    static std::size_t backgroundThreadCount() {
++        if (const char* env = ::getenv("MLN_BACKGROUND_THREADS")) {
++            const long parsed = ::strtol(env, nullptr, 10);
++            if (parsed >= 1 && parsed <= 32) {
++                return static_cast<std::size_t>(parsed);
++            }
++        }
++        return 4;
++    }
+ };
+ 
+ } // namespace mbgl

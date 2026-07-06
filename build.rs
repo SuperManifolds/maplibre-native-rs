@@ -444,6 +444,42 @@ fn submodule_update<P: AsRef<Path>>(repository: P) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
+/// Applies the source patches under `patches/` to the maplibre-native checkout.
+/// Patches that are already applied (detected via a reverse dry-run) are skipped,
+/// so re-running the build against an existing checkout is a no-op.
+fn apply_patches<P: AsRef<Path>>(repository: P) -> Result<(), Box<dyn std::error::Error>> {
+    let patches_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("patches");
+    println!("cargo:rerun-if-changed={}", patches_dir.display());
+    if !patches_dir.is_dir() {
+        return Ok(());
+    }
+    let mut patches: Vec<PathBuf> = fs::read_dir(&patches_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "patch"))
+        .collect();
+    patches.sort();
+    for patch in patches {
+        let git = |args: &[&str]| -> std::io::Result<bool> {
+            Ok(Command::new("git")
+                .current_dir(repository.as_ref())
+                .arg("apply")
+                .args(args)
+                .arg(&patch)
+                .status()?
+                .success())
+        };
+        if git(&["--reverse", "--check", "--quiet"])? {
+            continue;
+        }
+        if !git(&[])? {
+            return Err(format!("failed to apply {}", patch.display()).into());
+        }
+        println!("cargo:warning=Applied source patch {}", patch.display());
+    }
+    Ok(())
+}
+
 fn configure_local_build(
     config: &mut cmake::Config,
     api: GraphicsApi,
@@ -454,7 +490,22 @@ fn configure_local_build(
     // which the default "Unix Makefiles" generator does not support. Switch to Ninja.
     if target_os == "macos" || target_os == "ios" {
         config.generator("Ninja");
+
+        // darwin.cmake hard-requires bazel, but only to generate the Cocoa
+        // MLN*StyleLayer wrapper code, which the `mbgl-core` target never
+        // builds. Pre-seeding the cache variable satisfies the REQUIRED
+        // find_program when bazel is not installed.
+        let bazel_available =
+            Command::new("bazel").arg("--version").output().is_ok_and(|out| out.status.success());
+        if !bazel_available {
+            config.define("BAZEL", "/usr/bin/true");
+        }
     }
+
+    // The core is always built optimized, independent of the cargo profile: a
+    // Debug mbgl is ~8x slower at vector tile layout, which makes headless
+    // raster rendering unusable in dev builds.
+    config.profile("Release");
 
     match api {
         GraphicsApi::Metal => {
@@ -555,6 +606,9 @@ fn build_local(
 
     // Update submodules
     submodule_update(&maplibre_native_dir)?;
+
+    // Apply local source patches (e.g. the MLN_BACKGROUND_THREADS pool-size knob).
+    apply_patches(&maplibre_native_dir)?;
 
     let mut config = cmake::Config::new(maplibre_native_dir.clone());
     config.build_target(TARGET_NAME);
