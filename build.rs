@@ -486,6 +486,13 @@ fn configure_local_build(
     amalgam_lib: bool,
     target_os: &str,
 ) {
+    // maplibre-native's Windows builds are developed and tested with Ninja; the
+    // Visual Studio multi-config generator interacts poorly with the vendored
+    // vcpkg toolchain. Requires an MSVC environment (vcvars / VS dev prompt).
+    if target_os == "windows" {
+        config.generator("Ninja");
+    }
+
     // maplibre-native's platform/darwin/darwin.cmake calls enable_language(Swift),
     // which the default "Unix Makefiles" generator does not support. Switch to Ninja.
     if target_os == "macos" || target_os == "ios" {
@@ -614,6 +621,16 @@ fn build_local(
     config.build_target(TARGET_NAME);
     let api = GraphicsApi::from_selected_features();
     configure_local_build(&mut config, api, amalgam_lib, target_os);
+
+    // mbgl's Windows platform resolves its dependencies (curl, icu, libpng, …)
+    // through the vcpkg vendored in the checkout; this toolchain file wires it
+    // up. It requires an MSVC environment (VCINSTALLDIR set, e.g. vcvars64).
+    if target_os == "windows" {
+        config.define(
+            "CMAKE_TOOLCHAIN_FILE",
+            maplibre_native_dir.join("platform").join("windows").join("custom-toolchain.cmake"),
+        );
+    }
 
     let dest = config.build();
     println!("cargo:rustc-link-search=native={}", dest.join("build").display());
