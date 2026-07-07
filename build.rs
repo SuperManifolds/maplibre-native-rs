@@ -330,29 +330,13 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
     let vcpkg_root =
         maplibre_root.join("platform").join("windows").join("vendor").join("vcpkg");
     env::set_var("VCPKG_ROOT", &vcpkg_root);
-    // The vendored triplet is dynamic (x64-windows); opt into linking its DLL import libs.
-    env::set_var("VCPKGRS_DYNAMIC", "1");
-
-    // Dynamic libs need their DLLs beside the executable at run time. cargo runs
-    // test/bench binaries out of target/<profile>/deps, so copy them there.
-    let deps_dir = env::var("OUT_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .and_then(|out| out.ancestors().nth(3).map(|p| p.join("deps")));
-
-    for pkg in ["icu", "curl", "libuv", "libjpeg-turbo", "libpng", "libwebp"] {
-        match vcpkg::find_package(pkg) {
-            Ok(lib) => {
-                if let Some(dir) = &deps_dir {
-                    let _ = fs::create_dir_all(dir);
-                    for dll in &lib.found_dlls {
-                        if let Some(name) = dll.file_name() {
-                            let _ = fs::copy(dll, dir.join(name));
-                        }
-                    }
-                }
-            }
-            Err(e) => println!("cargo:warning=vcpkg find_package({pkg}) failed: {e}"),
+    // The vendored x64/arm64 triplet builds static libraries with a dynamic CRT,
+    // so the vcpkg crate's default static linking is correct — do not set
+    // VCPKGRS_DYNAMIC, and there are no DLLs to stage. find_package also emits the
+    // required transitive system libraries (ws2_32, crypt32, ...).
+    for pkg in ["curl", "libuv", "libjpeg-turbo", "libpng", "libwebp", "icu"] {
+        if let Err(e) = vcpkg::find_package(pkg) {
+            println!("cargo:warning=vcpkg find_package({pkg}) failed: {e}");
         }
     }
 }
