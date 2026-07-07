@@ -731,6 +731,9 @@ fn build_local(
     if target_os == "windows" && matches!(api, GraphicsApi::Vulkan) {
         link_vendored_shader_libs(&dest.join("build"));
     }
+    if target_os == "windows" {
+        link_windows_vcpkg(&maplibre_native_dir);
+    }
     // println!("cargo:warning=Building maplibre-native done.");
 
     // maplibre-native include directories
@@ -878,10 +881,9 @@ fn build_mln() {
             // darwin builds vendored ICU (system sqlite3 is linked below for all darwin builds)
             println!("cargo:rustc-link-lib=mbgl-vendor-icu");
         } else if target_os == "windows" {
-            // maplibre vendors sqlite; ICU, image codecs, curl and libuv come from
-            // the vendored vcpkg tree (resolved via the vcpkg crate below).
+            // maplibre vendors sqlite; ICU, image codecs, curl and libuv are linked
+            // from the vendored vcpkg tree in build_local.
             println!("cargo:rustc-link-lib=mbgl-vendor-sqlite");
-            link_windows_vcpkg(info.cpp_root.parent().unwrap());
         } else {
             println!("cargo:rustc-link-lib=mbgl-vendor-nunicode");
             println!("cargo:rustc-link-lib=mbgl-vendor-sqlite");
