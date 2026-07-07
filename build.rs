@@ -343,6 +343,18 @@ fn build_bridge(lib_name: &str, include_dirs: &[PathBuf], backend: GraphicsApi) 
         // downstream source builds on other toolchains, so it is opt-in.
         .warnings_into_errors(env::var_os("MLN_WARNINGS_AS_ERRORS").is_some());
 
+    // Mirror the compile definitions maplibre-native's own CMake sets on Windows
+    // so the bridge compiles the mbgl headers identically: expose M_PI from
+    // <cmath>, suppress windows.h's min/max macros, keep ghc::filesystem's storage
+    // type in sync with mbgl-core's ABI, and define WIN32 as the platform CMake does.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        build
+            .define("_USE_MATH_DEFINES", None)
+            .define("NOMINMAX", None)
+            .define("GHC_WIN_DISABLE_WSTRING_STORAGE_TYPE", None)
+            .define("WIN32", None);
+    }
+
     if matches!(backend, GraphicsApi::OpenGl(_)) {
         build.define("MLN_RENDER_BACKEND_OPENGL", Some("1"));
     }
