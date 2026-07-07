@@ -331,7 +331,10 @@ fn build_bridge(lib_name: &str, include_dirs: &[PathBuf], backend: GraphicsApi) 
     build
         .includes(&bridge_include_dirs)
         .includes(include_dirs)
-        .flag_if_supported("-std=c++20")
+        // `.std()` picks the compiler-correct flag (`/std:c++20` on MSVC,
+        // `-std=c++20` elsewhere); a bare `-std=` flag is dropped by MSVC,
+        // leaving the bridge on C++14 where the mbgl headers' std::optional fails.
+        .std("c++20")
         .warnings(true)
         // The bridge TU pulls in MapLibre Native's own headers, so `-Wall
         // -Wextra` surfaces warnings from third-party code whose exact set
