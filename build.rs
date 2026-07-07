@@ -330,8 +330,11 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
     let vcpkg_root =
         maplibre_root.join("platform").join("windows").join("vendor").join("vcpkg");
     env::set_var("VCPKG_ROOT", &vcpkg_root);
-    // The vendored x64/arm64 triplet builds static libraries with a dynamic CRT,
-    // so the vcpkg crate's default static linking is correct (no VCPKGRS_DYNAMIC).
+    // The custom triplet is named `x64-windows` (which the vcpkg crate treats as
+    // dynamic) but actually builds static libs with a dynamic CRT. VCPKGRS_DYNAMIC
+    // acknowledges the "dynamic" triplet so the crate links the libs; because they
+    // are really static there are no DLLs to stage at run time.
+    env::set_var("VCPKGRS_DYNAMIC", "1");
     let triplet = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64-windows",
         _ => "x64-windows",
