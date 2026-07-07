@@ -59,6 +59,12 @@ toml.workspace = true
 walkdir.workspace = true
 webgpu-shim = { workspace = true, optional = true }
 
+# Windows resolves ICU/curl/libuv/image codecs from the vendored vcpkg tree; the
+# vcpkg crate emits the correct import-lib names, search paths, and transitive
+# system deps rather than hard-coding Unix names.
+[target.'cfg(windows)'.build-dependencies]
+vcpkg = "0.2"
+
 [dev-dependencies]
 env_logger.workspace = true
 futures.workspace = true

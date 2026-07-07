@@ -321,6 +321,45 @@ fn resolve_mln_core() -> (PathBuf, Vec<PathBuf>) {
     (library_file, include_dirs)
 }
 
+/// Links the ICU, curl, libuv and image-codec libraries that maplibre-native's
+/// Windows build resolves through the vendored vcpkg tree. The `vcpkg` crate reads
+/// the install metadata and emits the correct MSVC import-lib names, search paths,
+/// and transitive system dependencies.
+#[cfg(windows)]
+fn link_windows_vcpkg(maplibre_root: &Path) {
+    let vcpkg_root =
+        maplibre_root.join("platform").join("windows").join("vendor").join("vcpkg");
+    env::set_var("VCPKG_ROOT", &vcpkg_root);
+    // The vendored triplet is dynamic (x64-windows); opt into linking its DLL import libs.
+    env::set_var("VCPKGRS_DYNAMIC", "1");
+
+    // Dynamic libs need their DLLs beside the executable at run time. cargo runs
+    // test/bench binaries out of target/<profile>/deps, so copy them there.
+    let deps_dir = env::var("OUT_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .and_then(|out| out.ancestors().nth(3).map(|p| p.join("deps")));
+
+    for pkg in ["icu", "curl", "libuv", "libjpeg-turbo", "libpng", "libwebp"] {
+        match vcpkg::find_package(pkg) {
+            Ok(lib) => {
+                if let Some(dir) = &deps_dir {
+                    let _ = fs::create_dir_all(dir);
+                    for dll in &lib.found_dlls {
+                        if let Some(name) = dll.file_name() {
+                            let _ = fs::copy(dll, dir.join(name));
+                        }
+                    }
+                }
+            }
+            Err(e) => println!("cargo:warning=vcpkg find_package({pkg}) failed: {e}"),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn link_windows_vcpkg(_maplibre_root: &Path) {}
+
 /// Gather include directories and build the C++ bridge using `cxx_build`.
 fn build_bridge(lib_name: &str, include_dirs: &[PathBuf], backend: GraphicsApi) {
     // println!("cargo:warning=Include_dirs: {:?}", include_dirs);
@@ -804,6 +843,11 @@ fn build_mln() {
         if is_apple {
             // darwin builds vendored ICU (system sqlite3 is linked below for all darwin builds)
             println!("cargo:rustc-link-lib=mbgl-vendor-icu");
+        } else if target_os == "windows" {
+            // maplibre vendors sqlite; ICU, image codecs, curl and libuv come from
+            // the vendored vcpkg tree (resolved via the vcpkg crate below).
+            println!("cargo:rustc-link-lib=mbgl-vendor-sqlite");
+            link_windows_vcpkg(info.cpp_root.parent().unwrap());
         } else {
             println!("cargo:rustc-link-lib=mbgl-vendor-nunicode");
             println!("cargo:rustc-link-lib=mbgl-vendor-sqlite");
@@ -813,6 +857,8 @@ fn build_mln() {
             println!("cargo:rustc-link-lib=icui18n"); //sudo dnf install libicu-devel
         }
         // Vulkan translates GLSL to SPIR-V at runtime via glslang; OpenGL/Metal don't.
+        // On Windows these are vendored by maplibre (in the build-dir search path);
+        // on Linux they come from the system packages.
         if backend == GraphicsApi::Vulkan {
             println!("cargo:rustc-link-lib=glslang"); //sudo dnf install libglslang-devel
             println!("cargo:rustc-link-lib=glslang-default-resource-limits"); //sudo dnf install libglslang-devel
@@ -822,15 +868,21 @@ fn build_mln() {
             println!("cargo:rustc-link-lib=SPIRV-Tools-opt"); //sudo dnf install  spirv-tools-devel // Required by glslang spirv-tools-devel
             println!("cargo:rustc-link-lib=SPIRV-Tools"); //sudo dnf install  spirv-tools-devel // Required by glslang spirv-tools-devel
         }
-        println!("cargo:rustc-link-lib=png"); // sudo dnf install libpng-devel
-        println!("cargo:rustc-link-lib=jpeg"); // sudo dnf install libjpeg-turbo-devel
-        println!("cargo:rustc-link-lib=webp"); // sudo dnf install libwebp-devel
+        // Windows links png/jpeg/webp via vcpkg above.
+        if target_os != "windows" {
+            println!("cargo:rustc-link-lib=png"); // sudo dnf install libpng-devel
+            println!("cargo:rustc-link-lib=jpeg"); // sudo dnf install libjpeg-turbo-devel
+            println!("cargo:rustc-link-lib=webp"); // sudo dnf install libwebp-devel
+        }
     }
-    if !is_apple {
+    if !is_apple && target_os != "windows" {
         println!("cargo:rustc-link-lib=uv"); // sudo dnf install libuv-devel
     }
-    println!("cargo:rustc-link-lib=curl");
-    println!("cargo:rustc-link-lib=z");
+    // curl and zlib come from vcpkg on Windows (linked above).
+    if target_os != "windows" {
+        println!("cargo:rustc-link-lib=curl");
+        println!("cargo:rustc-link-lib=z");
+    }
 
     if is_apple {
         println!("cargo:rustc-link-lib=framework=Foundation");
