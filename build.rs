@@ -333,7 +333,12 @@ fn build_bridge(lib_name: &str, include_dirs: &[PathBuf], backend: GraphicsApi) 
         .includes(include_dirs)
         .flag_if_supported("-std=c++20")
         .warnings(true)
-        .warnings_into_errors(true);
+        // The bridge TU pulls in MapLibre Native's own headers, so `-Wall
+        // -Wextra` surfaces warnings from third-party code whose exact set
+        // differs across compilers (GCC vs Clang) and versions. Turning those
+        // into errors is appropriate for this crate's own CI but breaks
+        // downstream source builds on other toolchains, so it is opt-in.
+        .warnings_into_errors(env::var_os("MLN_WARNINGS_AS_ERRORS").is_some());
 
     if matches!(backend, GraphicsApi::OpenGl(_)) {
         build.define("MLN_RENDER_BACKEND_OPENGL", Some("1"));

@@ -69,8 +69,12 @@ public:
     AutoreleasePoolScope() : pool(objc_autoreleasePoolPush()) {}
     ~AutoreleasePoolScope() { objc_autoreleasePoolPop(pool); }
 #else
-    AutoreleasePoolScope() = default;
-    ~AutoreleasePoolScope() = default;
+    // No-op off Apple platforms. The special members are user-provided rather
+    // than defaulted so the type is non-trivial: scope-guard locals that exist
+    // only for their (here empty) RAII effect are then exempt from
+    // -Wunused-variable, which -Werror would otherwise reject.
+    AutoreleasePoolScope() {}
+    ~AutoreleasePoolScope() {}
 #endif
     AutoreleasePoolScope(const AutoreleasePoolScope&) = delete;
     AutoreleasePoolScope& operator=(const AutoreleasePoolScope&) = delete;
