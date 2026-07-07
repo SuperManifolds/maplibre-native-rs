@@ -331,12 +331,20 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
         maplibre_root.join("platform").join("windows").join("vendor").join("vcpkg");
     env::set_var("VCPKG_ROOT", &vcpkg_root);
     // The vendored x64/arm64 triplet builds static libraries with a dynamic CRT,
-    // so the vcpkg crate's default static linking is correct — do not set
-    // VCPKGRS_DYNAMIC, and there are no DLLs to stage. find_package also emits the
-    // required transitive system libraries (ws2_32, crypt32, ...).
-    for pkg in ["curl", "libuv", "libjpeg-turbo", "libpng", "libwebp", "icu"] {
-        if let Err(e) = vcpkg::find_package(pkg) {
-            println!("cargo:warning=vcpkg find_package({pkg}) failed: {e}");
+    // so the vcpkg crate's default static linking is correct (no VCPKGRS_DYNAMIC).
+    let triplet = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64-windows",
+        _ => "x64-windows",
+    };
+    for pkg in ["curl", "libuv", "libjpeg-turbo", "libpng", "libwebp"] {
+        let mut cfg = vcpkg::Config::new();
+        cfg.vcpkg_root(vcpkg_root.clone());
+        cfg.target_triplet(triplet);
+        if let Err(e) = cfg.find_package(pkg) {
+            panic!(
+                "vcpkg find_package({pkg}) triplet={triplet} root={}: {e}",
+                vcpkg_root.display()
+            );
         }
     }
 }
