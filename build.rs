@@ -360,6 +360,41 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
 #[cfg(not(windows))]
 fn link_windows_vcpkg(_maplibre_root: &Path) {}
 
+/// Discovers the vendored glslang/SPIRV-Tools static component libraries in the
+/// CMake build tree and emits their directories and link names. Used on Windows,
+/// where they are built as separate `.lib` files rather than a single shared
+/// library that bundles the components.
+fn link_vendored_shader_libs(build_dir: &Path) {
+    const SHADER_LIBS: &[&str] = &[
+        "glslang",
+        "glslang-default-resource-limits",
+        "MachineIndependent",
+        "GenericCodeGen",
+        "OSDependent",
+        "OGLCompiler",
+        "SPIRV",
+        "SPVRemapper",
+        "SPIRV-Tools",
+        "SPIRV-Tools-opt",
+    ];
+    let mut linked = std::collections::HashSet::new();
+    for entry in walkdir::WalkDir::new(build_dir).into_iter().filter_map(Result::ok) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lib") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if SHADER_LIBS.contains(&stem) && linked.insert(stem.to_owned()) {
+            if let Some(dir) = path.parent() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+            }
+            println!("cargo:rustc-link-lib={stem}");
+        }
+    }
+}
+
 /// Gather include directories and build the C++ bridge using `cxx_build`.
 fn build_bridge(lib_name: &str, include_dirs: &[PathBuf], backend: GraphicsApi) {
     // println!("cargo:warning=Include_dirs: {:?}", include_dirs);
@@ -697,6 +732,13 @@ fn build_local(
         "cargo:rustc-link-search=native={}",
         dest.join("build").join("vendor").join("maplibre-tile-spec").join("cpp").display()
     );
+    // The Vulkan backend's glslang/SPIRV-Tools are built as vendored static
+    // component libraries nested throughout the CMake tree (Windows keeps each
+    // component in its own .lib rather than one shared object). Discover them and
+    // add each directory + link name; the top-level build dir alone misses them.
+    if target_os == "windows" && matches!(api, GraphicsApi::Vulkan) {
+        link_vendored_shader_libs(&dest.join("build"));
+    }
     // println!("cargo:warning=Building maplibre-native done.");
 
     // maplibre-native include directories
@@ -857,9 +899,9 @@ fn build_mln() {
             println!("cargo:rustc-link-lib=icui18n"); //sudo dnf install libicu-devel
         }
         // Vulkan translates GLSL to SPIR-V at runtime via glslang; OpenGL/Metal don't.
-        // On Windows these are vendored by maplibre (in the build-dir search path);
-        // on Linux they come from the system packages.
-        if backend == GraphicsApi::Vulkan {
+        // Linux links the system glslang/SPIRV-Tools here; Windows discovers the
+        // vendored static component libs from the build tree (see build_local).
+        if backend == GraphicsApi::Vulkan && target_os != "windows" {
             println!("cargo:rustc-link-lib=glslang"); //sudo dnf install libglslang-devel
             println!("cargo:rustc-link-lib=glslang-default-resource-limits"); //sudo dnf install libglslang-devel
 
