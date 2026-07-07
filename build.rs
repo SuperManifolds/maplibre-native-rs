@@ -339,7 +339,7 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
         Ok("aarch64") => "arm64-windows",
         _ => "x64-windows",
     };
-    for pkg in ["curl", "libuv", "libjpeg-turbo", "libpng", "libwebp"] {
+    for pkg in ["curl", "libuv", "libjpeg-turbo", "libpng", "libwebp", "icu"] {
         let mut cfg = vcpkg::Config::new();
         cfg.vcpkg_root(vcpkg_root.clone());
         cfg.target_triplet(triplet);
