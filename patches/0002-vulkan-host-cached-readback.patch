@@ -1,0 +1,32 @@
+diff --git i/src/mbgl/vulkan/texture2d.cpp w/src/mbgl/vulkan/texture2d.cpp
+index 4143cff..8b23148 100644
+--- i/src/mbgl/vulkan/texture2d.cpp
++++ w/src/mbgl/vulkan/texture2d.cpp
+@@ -340,9 +340,14 @@ void Texture2D::createTexture() {
+         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+         allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+     } else {
++        // Read-back target: the CPU memcpy's the pixels out, so allocate HOST_CACHED
++        // memory with RANDOM host access for fast cached reads. HOST_COHERENT-only is
++        // write-combined — fast to write but CPU reads are ~0.5GB/s (~1.8ms for a
++        // 512x512 tile on discrete GPUs, where it may also live in VRAM); cached reads
++        // are ~10x faster and are what dominated headless render latency on Windows.
+         allocCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+-        allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+-        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
++        allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++        allocCreateInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+     }
+ 
+     imageAllocation = std::make_shared<ImageAllocation>(backend.getAllocator());
+@@ -666,6 +671,10 @@ std::shared_ptr<PremultipliedImage> Texture2D::readImage() {
+         void* mappedData_ = nullptr;
+         vmaMapMemory(context.getBackend().getAllocator(), imageAllocation->allocation, &mappedData_);
+ 
++        // HOST_CACHED memory is not guaranteed coherent; invalidate the CPU cache so
++        // the readback sees the GPU's writes rather than stale cached data.
++        vmaInvalidateAllocation(context.getBackend().getAllocator(), imageAllocation->allocation, 0, VK_WHOLE_SIZE);
++
+         uint8_t* mappedData = reinterpret_cast<uint8_t*>(mappedData_) + layout.offset;
+ 
+         if (imageSize == layout.arrayPitch) {
