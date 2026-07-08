@@ -884,8 +884,9 @@ fn build_mln() {
             // darwin builds vendored ICU (system sqlite3 is linked below for all darwin builds)
             println!("cargo:rustc-link-lib=mbgl-vendor-icu");
         } else if target_os == "windows" {
-            // maplibre vendors sqlite; ICU, image codecs, curl and libuv are linked
-            // from the vendored vcpkg tree in build_local.
+            // maplibre vendors nunicode + sqlite (collator/string code uses nunicode);
+            // ICU, image codecs, curl and libuv are linked from vcpkg in build_local.
+            println!("cargo:rustc-link-lib=mbgl-vendor-nunicode");
             println!("cargo:rustc-link-lib=mbgl-vendor-sqlite");
         } else {
             println!("cargo:rustc-link-lib=mbgl-vendor-nunicode");
