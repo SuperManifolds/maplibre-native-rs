@@ -1,0 +1,36 @@
+diff --git i/include/mbgl/gfx/shader_group.hpp w/include/mbgl/gfx/shader_group.hpp
+index 5b58430..ee5355c 100644
+--- i/include/mbgl/gfx/shader_group.hpp
++++ w/include/mbgl/gfx/shader_group.hpp
+@@ -4,11 +4,10 @@
+ #include <mbgl/util/containers.hpp>
+ #include <mbgl/util/hash.hpp>
+ 
+-#include <iomanip>
++#include <charconv>
+ #include <memory>
+ #include <mutex>
+ #include <shared_mutex>
+-#include <sstream>
+ #include <string>
+ 
+ namespace mbgl {
+@@ -165,7 +164,17 @@ protected:
+     using PropertyHashType = std::uint64_t;
+ 
+     std::string getShaderName(const std::string_view& name, const PropertyHashType key) {
+-        return (std::ostringstream() << name << '#' << std::hex << key).str();
++        // Built on every shader lookup; std::to_chars instead of std::ostringstream because
++        // the stream constructor is disproportionately expensive on some standard libraries
++        // (locale initialization), and this sits on the per-drawable-build hot path.
++        char hex[sizeof(PropertyHashType) * 2];
++        const auto res = std::to_chars(hex, hex + sizeof(hex), key, 16);
++        std::string shaderName;
++        shaderName.reserve(name.size() + 1 + static_cast<std::size_t>(res.ptr - hex));
++        shaderName.append(name);
++        shaderName.push_back('#');
++        shaderName.append(hex, res.ptr);
++        return shaderName;
+     }
+ 
+     /// Generate a map key for the specified combination of properties
