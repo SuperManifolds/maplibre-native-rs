@@ -355,39 +355,54 @@ fn link_windows_vcpkg(maplibre_root: &Path) {
 #[cfg(not(windows))]
 fn link_windows_vcpkg(_maplibre_root: &Path) {}
 
-/// Discovers the vendored glslang/SPIRV-Tools static component libraries in the
-/// CMake build tree and emits their directories and link names. Used on Windows,
-/// where they are built as separate `.lib` files rather than a single shared
-/// library that bundles the components.
-fn link_vendored_shader_libs(build_dir: &Path) {
+/// Discovers the vendored glslang/SPIRV component static libraries in the CMake
+/// build tree and emits their directories and link names. maplibre builds these
+/// from its `vendor/glslang` submodule as separate archives (`<name>.lib` on
+/// Windows, `lib<name>.a` on Unix) rather than one library that bundles the
+/// components, so each must be discovered and linked individually. Returns the
+/// number of components linked (0 when the tree has none, e.g. precompiled).
+///
+/// The libraries are emitted in dependency order — a library appears before the
+/// ones that satisfy its undefined symbols (`SPIRV` -> glslang core -> its
+/// components) — so single-pass linkers (GNU ld/lld on Linux) resolve them
+/// without a `--start-group`.
+fn link_vendored_shader_libs(build_dir: &Path) -> usize {
     const SHADER_LIBS: &[&str] = &[
+        "SPIRV",
         "glslang",
-        "glslang-default-resource-limits",
         "MachineIndependent",
         "GenericCodeGen",
         "OSDependent",
         "OGLCompiler",
-        "SPIRV",
         "SPVRemapper",
-        "SPIRV-Tools",
+        "glslang-default-resource-limits",
         "SPIRV-Tools-opt",
+        "SPIRV-Tools",
     ];
-    let mut linked = std::collections::HashSet::new();
+    let mut dirs: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
     for entry in walkdir::WalkDir::new(build_dir).into_iter().filter_map(Result::ok) {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("lib") {
-            continue;
-        }
+        let Some(dir) = path.parent() else { continue };
         let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        if SHADER_LIBS.contains(&stem) && linked.insert(stem.to_owned()) {
-            if let Some(dir) = path.parent() {
-                println!("cargo:rustc-link-search=native={}", dir.display());
-            }
-            println!("cargo:rustc-link-lib={stem}");
+        // Component name: `<name>.lib` (Windows) or `lib<name>.a` (Unix).
+        let name = match path.extension().and_then(|e| e.to_str()) {
+            Some("lib") => stem.to_owned(),
+            Some("a") => stem.strip_prefix("lib").unwrap_or(stem).to_owned(),
+            _ => continue,
+        };
+        dirs.entry(name).or_insert_with(|| dir.to_path_buf());
+    }
+    let mut linked = 0;
+    for lib in SHADER_LIBS {
+        if let Some(dir) = dirs.get(*lib) {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib={lib}");
+            linked += 1;
         }
     }
+    linked
 }
 
 /// Gather include directories and build the C++ bridge using `cxx_build`.
@@ -558,7 +573,7 @@ fn apply_patches<P: AsRef<Path>>(repository: P) -> Result<(), Box<dyn std::error
                 .status()?
                 .success())
         };
-        if git(&["--reverse", "--check", "--quiet"])? {
+        if git(&["--reverse", "--check"])? {
             continue;
         }
         if !git(&[])? {
@@ -896,17 +911,23 @@ fn build_mln() {
             println!("cargo:rustc-link-lib=icudata"); //sudo dnf install libicu-devel
             println!("cargo:rustc-link-lib=icui18n"); //sudo dnf install libicu-devel
         }
-        // Vulkan translates GLSL to SPIR-V at runtime via glslang; OpenGL/Metal don't.
-        // Linux links the system glslang/SPIRV-Tools here; Windows discovers the
-        // vendored static component libs from the build tree (see build_local).
+        // Vulkan translates GLSL to SPIR-V at runtime via glslang; OpenGL/Metal
+        // don't. maplibre builds glslang from its vendored submodule; link those
+        // component archives here, after mbgl-core, so single-pass linkers
+        // resolve mbgl's references into them. The system glslang is only a
+        // fallback for precompiled cores (which ship no vendored build tree); it
+        // is unusable on distros whose glslang predates `GetDefaultResources`
+        // (e.g. Ubuntu 22.04's glslang 11.8), which is why the source build must
+        // link the vendored copy.
         if backend == GraphicsApi::Vulkan && target_os != "windows" {
-            println!("cargo:rustc-link-lib=glslang"); //sudo dnf install libglslang-devel
-            println!("cargo:rustc-link-lib=glslang-default-resource-limits"); //sudo dnf install libglslang-devel
-
-            // `SPIRV-Tools-opt` depends on symbols from `SPIRV-Tools`.
-            // Keep this order for static linking (notably on Linux/aarch64).
-            println!("cargo:rustc-link-lib=SPIRV-Tools-opt"); //sudo dnf install  spirv-tools-devel // Required by glslang spirv-tools-devel
-            println!("cargo:rustc-link-lib=SPIRV-Tools"); //sudo dnf install  spirv-tools-devel // Required by glslang spirv-tools-devel
+            let build_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("build");
+            if link_vendored_shader_libs(&build_dir) == 0 {
+                println!("cargo:rustc-link-lib=glslang"); //sudo dnf install libglslang-devel
+                println!("cargo:rustc-link-lib=glslang-default-resource-limits"); //sudo dnf install libglslang-devel
+                // `SPIRV-Tools-opt` depends on symbols from `SPIRV-Tools`.
+                println!("cargo:rustc-link-lib=SPIRV-Tools-opt"); //sudo dnf install spirv-tools-devel
+                println!("cargo:rustc-link-lib=SPIRV-Tools"); //sudo dnf install spirv-tools-devel
+            }
         }
         // Windows links png/jpeg/webp via vcpkg above.
         if target_os != "windows" {
