@@ -613,6 +613,26 @@ fn configure_local_build(
         }
     }
 
+    // GCC 16 miscompiles the atomic ref-counting in mapbox's WeakPtr
+    // (maplibre-native-base): std::weak_ptr::lock() spuriously fails on a live
+    // control block, so every actor's scheduler weak-ref reads as expired and the
+    // Mailbox silently drops cross-thread messages. In headless rendering this
+    // breaks file-source dispatch — resource requests are issued but never reach
+    // the loader thread, so any network-backed style hangs. Clang (which macOS
+    // already uses) compiles it correctly, so prefer it on Linux unless the caller
+    // pins a compiler via CC/CXX.
+    if target_os == "linux"
+        && env::var_os("CC").is_none()
+        && env::var_os("CXX").is_none()
+        && Command::new("clang++").arg("--version").output().is_ok_and(|o| o.status.success())
+    {
+        // Set CC/CXX rather than CMAKE_*_COMPILER cache entries: the cmake crate
+        // derives its own compiler from these, and a conflicting cache define is
+        // not reliably honored for every translation unit.
+        env::set_var("CC", "clang");
+        env::set_var("CXX", "clang++");
+    }
+
     // The core is always built optimized, independent of the cargo profile: a
     // Debug mbgl is ~8x slower at vector tile layout, which makes headless
     // raster rendering unusable in dev builds.
