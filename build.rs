@@ -584,6 +584,27 @@ fn apply_patches<P: AsRef<Path>>(repository: P) -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Whether the default C++ compiler is GCC 16 or newer — the versions that
+/// miscompile mapbox's WeakPtr atomic refcounting. Any Clang (which reports
+/// "clang" in its banner) and older GCC return false, so they are left as-is.
+fn default_cxx_is_gcc_16_plus() -> bool {
+    let Ok(banner) = Command::new("c++").arg("--version").output() else {
+        return false;
+    };
+    if String::from_utf8_lossy(&banner.stdout).to_lowercase().contains("clang") {
+        return false;
+    }
+    let Ok(dump) = Command::new("c++").arg("-dumpversion").output() else {
+        return false;
+    };
+    String::from_utf8_lossy(&dump.stdout)
+        .trim()
+        .split('.')
+        .next()
+        .and_then(|major| major.parse::<u32>().ok())
+        .is_some_and(|major| major >= 16)
+}
+
 fn configure_local_build(
     config: &mut cmake::Config,
     api: GraphicsApi,
@@ -618,12 +639,15 @@ fn configure_local_build(
     // control block, so every actor's scheduler weak-ref reads as expired and the
     // Mailbox silently drops cross-thread messages. In headless rendering this
     // breaks file-source dispatch — resource requests are issued but never reach
-    // the loader thread, so any network-backed style hangs. Clang (which macOS
-    // already uses) compiles it correctly, so prefer it on Linux unless the caller
-    // pins a compiler via CC/CXX.
+    // the loader thread, so any network-backed style hangs. Clang compiles it
+    // correctly, so switch to it — but ONLY when the default compiler is actually
+    // an affected GCC (>= 16). Forcing Clang unconditionally would drag in an old
+    // distro Clang (e.g. on Ubuntu CI) that can't compile the newer libstdc++
+    // <ranges> headers. Older GCC and any Clang are left untouched.
     if target_os == "linux"
         && env::var_os("CC").is_none()
         && env::var_os("CXX").is_none()
+        && default_cxx_is_gcc_16_plus()
         && Command::new("clang++").arg("--version").output().is_ok_and(|o| o.status.success())
     {
         // Set CC/CXX rather than CMAKE_*_COMPILER cache entries: the cmake crate
