@@ -1,0 +1,66 @@
+diff --git i/src/mbgl/vulkan/renderer_backend.cpp w/src/mbgl/vulkan/renderer_backend.cpp
+index 22a2b8d..f3402c9 100644
+--- i/src/mbgl/vulkan/renderer_backend.cpp
++++ w/src/mbgl/vulkan/renderer_backend.cpp
+@@ -29,7 +29,9 @@
+ #include <mbgl/shaders/vulkan/widevector.hpp>
+ 
+ #include <cassert>
++#include <cstdlib>
+ #include <string>
++#include <string_view>
+ 
+ #ifdef ENABLE_VULKAN_VALIDATION
+ #include <vulkan/vulkan_to_string.hpp>
+@@ -551,14 +553,48 @@ void RendererBackend::initDevice() {
+         const auto& physicalDevices = instance->enumeratePhysicalDevices(dispatcher);
+         if (physicalDevices.empty()) throw std::runtime_error("No Vulkan compatible GPU found");
+ 
++        // Rank compatible devices so a real GPU is preferred over a software
++        // rasterizer (e.g. Mesa lavapipe) and a discrete GPU over an integrated
++        // one, instead of binding the first compatible device in enumeration
++        // order — which can be a CPU device, leaving the GPU idle while the CPU
++        // renders. MLN_VULKAN_DEVICE_NAME, when set, pins the first compatible
++        // device whose name contains that substring.
++        const auto deviceRank = [](vk::PhysicalDeviceType type) -> int {
++            switch (type) {
++                case vk::PhysicalDeviceType::eDiscreteGpu:   return 4;
++                case vk::PhysicalDeviceType::eIntegratedGpu: return 3;
++                case vk::PhysicalDeviceType::eVirtualGpu:    return 2;
++                case vk::PhysicalDeviceType::eOther:         return 1;
++                case vk::PhysicalDeviceType::eCpu:           return 0;
++                default:                                     return 0;
++            }
++        };
++
++        const char* const preferredName = std::getenv("MLN_VULKAN_DEVICE_NAME");
++
++        vk::PhysicalDevice best;
++        int bestRank = -1;
+         for (const auto& candidate : physicalDevices) {
+-            if (isPhysicalDeviceCompatible(candidate)) {
+-                physicalDevice = candidate;
++            if (!isPhysicalDeviceCompatible(candidate)) continue;
++            const auto& props = candidate.getProperties(dispatcher);
++            if (preferredName && preferredName[0] != '\0' &&
++                std::string_view(props.deviceName.data()).find(preferredName) != std::string_view::npos) {
++                best = candidate;
+                 break;
+             }
++            const int rank = deviceRank(props.deviceType);
++            if (rank > bestRank) {
++                bestRank = rank;
++                best = candidate;
++            }
+         }
+ 
+-        if (!physicalDevice) throw std::runtime_error("No suitable GPU found");
++        if (!best) throw std::runtime_error("No suitable GPU found");
++
++        // Re-run compatibility on the winner so graphicsQueueIndex /
++        // presentQueueIndex (set as a side effect) match the chosen device.
++        isPhysicalDeviceCompatible(best);
++        physicalDevice = best;
+     };
+ 
+     pickPhysicalDevice();
