@@ -1,0 +1,59 @@
+diff --git a/platform/windows/Get-VendorPackages.ps1 b/platform/windows/Get-VendorPackages.ps1
+index 5874a32..4bb35eb 100644
+--- a/platform/windows/Get-VendorPackages.ps1
++++ b/platform/windows/Get-VendorPackages.ps1
+@@ -28,19 +28,44 @@ switch($Renderer)
+ 	'All'    { $renderer_packages = @('egl', 'opengl-registry'); break }
+ }
+ 
+-if(-not (Test-Path ('{0}\vcpkg.exe' -f $vcpkg_temp_dir)))
++$vcpkg_exe = '{0}\vcpkg.exe' -f $vcpkg_temp_dir
++
++# Bootstrapping vcpkg (downloads vcpkg.exe) and installing packages (downloads
++# curl/ICU/... sources) hit the network with no built-in retry, so on CI they
++# fail intermittently ("Downloading vcpkg.exe failed", asset download errors).
++# Retry both with backoff so a single transient blip doesn't fail the build.
++for($attempt = 1; ($attempt -le 3) -and -not (Test-Path $vcpkg_exe); $attempt++)
+ {
++    if($attempt -gt 1)
++    {
++        Write-Warning ('vcpkg bootstrap failed; retry {0}/3' -f $attempt)
++        Start-Sleep -Seconds 15
++    }
+     & ('{0}\bootstrap-vcpkg.bat' -f $vcpkg_temp_dir)
+ }
++if(-not (Test-Path $vcpkg_exe))
++{
++    throw 'vcpkg bootstrap failed after 3 attempts'
++}
+ 
+-& ('{0}\vcpkg.exe' -f $vcpkg_temp_dir) $(
+-    @(
+-        '--disable-metrics',
+-        ('--overlay-triplets={0}' -f [System.IO.Path]::Combine($PWD.Path, 'vendor', 'vcpkg-custom-triplets')),
+-        ('--triplet={0}' -f $Triplet),
+-        '--clean-after-build',
+-        'install', 'curl', 'dlfcn-win32', 'glfw3', 'libuv', 'libjpeg-turbo', 'libpng', 'libwebp'
+-    ) + $renderer_packages + $(if(${With-ICU}) {@('icu')} else {@()})
+-)
++$vcpkg_install_args = @(
++    '--disable-metrics',
++    ('--overlay-triplets={0}' -f [System.IO.Path]::Combine($PWD.Path, 'vendor', 'vcpkg-custom-triplets')),
++    ('--triplet={0}' -f $Triplet),
++    '--clean-after-build',
++    'install', 'curl', 'dlfcn-win32', 'glfw3', 'libuv', 'libjpeg-turbo', 'libpng', 'libwebp'
++) + $renderer_packages + $(if(${With-ICU}) {@('icu')} else {@()})
++
++for($attempt = 1; $attempt -le 3; $attempt++)
++{
++    & $vcpkg_exe $vcpkg_install_args
++    if($LASTEXITCODE -eq 0) { break }
++    if($attempt -eq 3)
++    {
++        throw ('vcpkg install failed after 3 attempts (exit {0})' -f $LASTEXITCODE)
++    }
++    Write-Warning ('vcpkg install failed (exit {0}); retry {1}/3' -f $LASTEXITCODE, $attempt)
++    Start-Sleep -Seconds 15
++}
+ 
+ subst $vcpkg_temp_dir /D
