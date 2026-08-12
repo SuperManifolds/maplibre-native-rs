@@ -1135,13 +1135,15 @@ pub mod ffi {
         fn currentThreadRunLoopStop();
         /// Creates a new map renderer instance.
         #[allow(clippy::too_many_arguments)]
+        // Fallible: the Vulkan backend throws when the loader/GPU is unavailable
+        // (rather than crashing the process); cxx surfaces that as an `Err`.
         fn MapRenderer_new(
             mapMode: MapMode,
             width: u32,
             height: u32,
             pixelRatio: f32,
             resource_options: &CxxResourceOptions,
-        ) -> UniquePtr<MapRenderer>;
+        ) -> Result<UniquePtr<MapRenderer>>;
         /// Reads the current still image from the renderer.
         fn readStillImage(self: Pin<&mut MapRenderer>) -> UniquePtr<BridgeImage>;
         /// Gets the pixel data pointer from a bridge image.

@@ -90,12 +90,16 @@ impl ImageRendererBuilder {
     #[must_use]
     pub fn build_static_renderer(self) -> ImageRenderer<Static> {
         // TODO: Should the width/height be passed in here, or have another `build_static_with_size` method?
-        ImageRenderer::new(MapMode::Static, self)
+        ImageRenderer::new(MapMode::Static, self).expect("failed to create static renderer")
     }
 
-    /// Builds a tile renderer
-    #[must_use]
-    pub fn build_tile_renderer(self) -> ImageRenderer<Tile> {
+    /// Builds a tile renderer.
+    ///
+    /// # Errors
+    /// Returns an error when the graphics backend cannot be initialized — e.g. a
+    /// missing or broken Vulkan runtime, or no compatible GPU. Previously this
+    /// crashed the process inside the backend; it now fails gracefully.
+    pub fn build_tile_renderer(self) -> Result<ImageRenderer<Tile>, cxx::Exception> {
         // TODO: Is the width/height used for this mode?
         ImageRenderer::new(MapMode::Tile, self)
     }
@@ -104,13 +108,14 @@ impl ImageRendererBuilder {
     /// Using the `MapObserver` it is possible to react on signals from the Map
     #[must_use]
     pub fn build_continuous_renderer(self) -> ImageRenderer<Continuous> {
-        ImageRenderer::new(MapMode::Continuous, self)
+        ImageRenderer::new(MapMode::Continuous, self).expect("failed to create continuous renderer")
     }
 }
 
 impl<S> ImageRenderer<S> {
-    /// Creates a new renderer instance
-    fn new(map_mode: MapMode, opts: ImageRendererBuilder) -> Self {
+    /// Creates a new renderer instance. Fails when the graphics backend cannot be
+    /// initialized (the Vulkan backend throws instead of crashing the process).
+    fn new(map_mode: MapMode, opts: ImageRendererBuilder) -> Result<Self, cxx::Exception> {
         let resource_options = opts.resource_options.unwrap_or_default();
         let mut map = ffi::MapRenderer_new(
             map_mode,
@@ -118,19 +123,19 @@ impl<S> ImageRenderer<S> {
             opts.height.get(),
             opts.pixel_ratio,
             resource_options.as_ref(),
-        );
+        )?;
 
         // Wire up the observer dispatchers once; `map_observer()` afterwards is
         // a pure view that only swaps the stored callbacks.
         let observer_callbacks = Rc::new(MapObserverCallbacks::default());
         observer_callbacks.install(&map.pin_mut().observer());
 
-        Self {
+        Ok(Self {
             instance: map,
             observer_callbacks,
             style_specified: false,
             _marker: PhantomData,
             _not_send: PhantomData,
-        }
+        })
     }
 }

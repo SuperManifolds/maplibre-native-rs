@@ -1,0 +1,23 @@
+diff --git a/src/mbgl/vulkan/renderer_backend.cpp b/src/mbgl/vulkan/renderer_backend.cpp
+index 22a2b8d..a28f81c 100644
+--- a/src/mbgl/vulkan/renderer_backend.cpp
++++ b/src/mbgl/vulkan/renderer_backend.cpp
+@@ -378,8 +378,16 @@ void RendererBackend::initDebug() {
+ }
+ 
+ void RendererBackend::init() {
+-    // initialize minimal set of function pointers
+-    dispatcher.init(dynamicLoader);
++    // initialize minimal set of function pointers. Guard the loader first: on a
++    // machine with a missing or broken Vulkan runtime the loaded library exposes a
++    // null vkGetInstanceProcAddr, and dispatcher.init(dynamicLoader) would call
++    // through it and crash the whole process with an access violation. Throw a
++    // std::runtime_error instead so a fallible caller can recover.
++    auto vkGetInstanceProcAddr = dynamicLoader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
++    if (!vkGetInstanceProcAddr) {
++        throw std::runtime_error("Vulkan loader is unavailable (no vkGetInstanceProcAddr)");
++    }
++    dispatcher.init(vkGetInstanceProcAddr);
+ 
+     initFrameCapture();
+     initInstance();
